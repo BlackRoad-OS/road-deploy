@@ -30,7 +30,7 @@ Node.js deployment engine that automates the entire deployment pipeline from Git
 
 **Target Environment:**
 - **Host:** alice (192.168.4.49)
-- **Port:** 9000
+- **Port:** 9001
 - **Target Server:** aria (192.168.4.82)
 - **Deploy Directory:** `/var/www/sites/`
 
@@ -39,7 +39,7 @@ Node.js deployment engine that automates the entire deployment pipeline from Git
 ## 🏗️ Architecture
 
 ```
-GitHub Push → Webhook → road-deploy (alice:9000)
+GitHub Push → Webhook → road-deploy (alice:9001)
                            ↓
                     1. Clone repo
                     2. Install dependencies
@@ -92,7 +92,7 @@ POST /api/deployments/:id/rollback
 ```bash
 POST /webhook/github
 # Configure in GitHub repo settings:
-# Payload URL: http://alice:9000/webhook/github
+# Payload URL: http://alice:9001/webhook/github
 # Content type: application/json
 # Events: push
 ```
@@ -119,7 +119,7 @@ npm install
 
 # 3. Configure environment
 cat > .env << EOF
-PORT=9000
+PORT=9001
 DEPLOY_BASE_DIR=/var/deployments
 TARGET_HOST=pi@aria
 TARGET_DEPLOY_DIR=/var/www/sites
@@ -174,7 +174,7 @@ pm2 startup
 ### **Deploy a Static Site**
 
 ```bash
-curl -X POST http://alice:9000/api/deploy \
+curl -X POST http://alice:9001/api/deploy \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "blackroad.io",
@@ -188,7 +188,7 @@ curl -X POST http://alice:9000/api/deploy \
 ### **Deploy a React App**
 
 ```bash
-curl -X POST http://alice:9000/api/deploy \
+curl -X POST http://alice:9001/api/deploy \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "app.blackroad.io",
@@ -202,7 +202,7 @@ curl -X POST http://alice:9000/api/deploy \
 ### **Deploy a Next.js App**
 
 ```bash
-curl -X POST http://alice:9000/api/deploy \
+curl -X POST http://alice:9001/api/deploy \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "docs.blackroad.io",
@@ -217,10 +217,10 @@ curl -X POST http://alice:9000/api/deploy \
 
 ```bash
 # List all deployments
-curl http://alice:9000/api/deployments
+curl http://alice:9001/api/deployments
 
 # Get specific deployment
-curl http://alice:9000/api/deployments/abc-123-def
+curl http://alice:9001/api/deployments/abc-123-def
 ```
 
 ---
@@ -232,7 +232,7 @@ curl http://alice:9000/api/deployments/abc-123-def
 Go to: `Settings > Webhooks > Add webhook`
 
 ```
-Payload URL: http://alice:9000/webhook/github
+Payload URL: http://alice:9001/webhook/github
 Content type: application/json
 Secret: (optional - set in .env as WEBHOOK_SECRET)
 Events: Just the push event
@@ -350,7 +350,7 @@ sudo nginx -s reload
 
 ### **Health Check:**
 ```bash
-curl http://alice:9000/health
+curl http://alice:9001/health
 ```
 
 ### **PM2 Status:**
@@ -363,7 +363,7 @@ pm2 monit
 ### **Deployment Logs:**
 ```bash
 # View deployment history
-curl http://alice:9000/api/deployments | jq
+curl http://alice:9001/api/deployments | jq
 
 # Watch live deployment
 pm2 logs road-deploy --lines 50
@@ -380,7 +380,7 @@ If deployment fails health check, automatically rolls back to previous version.
 ### **Manual Rollback:**
 
 ```bash
-curl -X POST http://alice:9000/api/deployments/abc-123/rollback
+curl -X POST http://alice:9001/api/deployments/abc-123/rollback
 ```
 
 ---
