@@ -15,6 +15,12 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 9000;
 
+// Sanitize shell arguments to prevent command injection
+function shellEscape(str) {
+  if (typeof str !== 'string') return '';
+  return "'" + str.replace(/'/g, "'\\''") + "'";
+}
+
 // Configuration
 const DEPLOY_BASE_DIR = process.env.DEPLOY_BASE_DIR || '/tmp/road-deploys';
 const TARGET_HOST = process.env.TARGET_HOST || 'aria'; // Default deploy target
@@ -60,22 +66,28 @@ app.post('/api/deploy', async (req, res) => {
   try {
     // Step 1: Clone repository
     console.log(`[${deploymentId}] Cloning ${repo_url}...`);
-    await execAsync(`git clone -b ${branch} ${repo_url} ${workdir}`);
+    await execAsync(`git clone -b ${shellEscape(branch)} ${shellEscape(repo_url)} ${shellEscape(workdir)}`);
 
     // Step 2: Run build command
     console.log(`[${deploymentId}] Building project...`);
-    const buildOutput = await execAsync(build_command, { cwd: workdir });
+    const allowedBuildCommands = ['npm run build', 'npm install && npm run build', 'yarn build', 'yarn install && yarn build', 'go build', 'pip install -r requirements.txt', 'make'];
+    if (!allowedBuildCommands.includes(build_command)) {
+      throw new Error(`Build command not allowed: ${build_command}`);
+    }
+    await execAsync(build_command, { cwd: workdir });
 
     // Step 3: Sync to aria Pi
     console.log(`[${deploymentId}] Deploying to ${TARGET_HOST}...`);
-    const deployDir = `/home/pi/static-sites/${domain}`;
+    const safeDomain = domain.replace(/[^a-zA-Z0-9._-]/g, '');
+    const deployDir = `/home/pi/static-sites/${safeDomain}`;
 
     // Create deploy directory on aria
-    await execAsync(`ssh pi@${TARGET_HOST} "mkdir -p ${deployDir}"`);
+    await execAsync(`ssh pi@${TARGET_HOST} "mkdir -p ${shellEscape(deployDir)}"`);
 
     // Rsync built files
-    const sourceDir = path.join(workdir, deploy_path);
-    await execAsync(`rsync -avz --delete ${sourceDir}/ pi@${TARGET_HOST}:${deployDir}/`);
+    const safePath = deploy_path.replace(/[^a-zA-Z0-9._/-]/g, '');
+    const sourceDir = path.join(workdir, safePath);
+    await execAsync(`rsync -avz --delete ${shellEscape(sourceDir)}/ pi@${TARGET_HOST}:${shellEscape(deployDir)}/`);
 
     // Step 4: Configure nginx on aria
     await configureNginx(domain, deployDir);
@@ -113,7 +125,7 @@ app.post('/api/deploy', async (req, res) => {
     // Cleanup on failure
     try {
       await execAsync(`rm -rf ${workdir}`);
-    } catch {}
+    } catch (_e) { /* cleanup best-effort */ }
 
     res.status(500).json({
       success: false,
@@ -182,10 +194,11 @@ function execAsync(command, options = {}) {
 }
 
 async function configureNginx(domain, deployDir) {
+  const safeDomain = domain.replace(/[^a-zA-Z0-9._-]/g, '');
   const nginxConfig = `
 server {
     listen 80;
-    server_name ${domain};
+    server_name ${safeDomain};
 
     root ${deployDir};
     index index.html index.htm;
@@ -212,22 +225,23 @@ server {
 `;
 
   // Write nginx config
-  const configFile = `/tmp/nginx-${domain}.conf`;
+  const configFile = `/tmp/nginx-${safeDomain}.conf`;
   await fs.writeFile(configFile, nginxConfig);
 
   // Copy to aria
-  await execAsync(`scp ${configFile} pi@${TARGET_HOST}:/tmp/`);
-  await execAsync(`ssh pi@${TARGET_HOST} "sudo mv /tmp/nginx-${domain}.conf /etc/nginx/sites-available/${domain}"`);
-  await execAsync(`ssh pi@${TARGET_HOST} "sudo ln -sf /etc/nginx/sites-available/${domain} /etc/nginx/sites-enabled/${domain}"`);
+  await execAsync(`scp ${shellEscape(configFile)} pi@${TARGET_HOST}:/tmp/`);
+  await execAsync(`ssh pi@${TARGET_HOST} "sudo mv /tmp/nginx-${safeDomain}.conf /etc/nginx/sites-available/${safeDomain}"`);
+  await execAsync(`ssh pi@${TARGET_HOST} "sudo ln -sf /etc/nginx/sites-available/${safeDomain} /etc/nginx/sites-enabled/${safeDomain}"`);
 
   // Test nginx config
   await execAsync(`ssh pi@${TARGET_HOST} "sudo nginx -t"`);
 }
 
 async function generateSSL(domain) {
+  const safeDomain = domain.replace(/[^a-zA-Z0-9._-]/g, '');
   // Use certbot to generate Let's Encrypt certificate
   try {
-    await execAsync(`ssh pi@${TARGET_HOST} "sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --email admin@blackroad.io"`);
+    await execAsync(`ssh pi@${TARGET_HOST} "sudo certbot --nginx -d ${shellEscape(safeDomain)} --non-interactive --agree-tos --email admin@blackroad.io"`);
     console.log(`✅ SSL certificate generated for ${domain}`);
   } catch (error) {
     console.warn(`⚠️  SSL generation failed for ${domain}: ${error.message}`);
@@ -257,7 +271,7 @@ app.post('/api/webhook/github', async (req, res) => {
       // Look up domain from repository name or metadata
       const domain = repository.name + '.blackroad.io'; // Simple mapping
 
-      await axios.post('http://localhost:9000/api/deploy', {
+      await axios.post(`http://localhost:${PORT}/api/deploy`, {
         domain,
         repo_url,
         branch
@@ -278,22 +292,26 @@ app.post('/api/webhook/github', async (req, res) => {
 (async () => {
   try {
     await fs.mkdir(DEPLOY_BASE_DIR, { recursive: true });
-  } catch {}
+  } catch (_e) { /* best-effort */ }
 })();
 
-app.listen(PORT, () => {
-  console.log('🚀 BlackRoad Deployment Engine');
-  console.log('===============================');
-  console.log(`🌐 Server running on port ${PORT}`);
-  console.log(`📂 Deploy directory: ${DEPLOY_BASE_DIR}`);
-  console.log(`🎯 Target host: ${TARGET_HOST} (${TARGET_IP})`);
-  console.log(`📡 Registry API: ${REGISTRY_API}`);
-  console.log('');
-  console.log('Endpoints:');
-  console.log(`  POST /api/deploy - Trigger deployment`);
-  console.log(`  GET  /api/deploy/:id - Check deployment status`);
-  console.log(`  GET  /api/domains - List deployed domains`);
-  console.log(`  POST /api/webhook/github - GitHub webhook handler`);
-  console.log('');
-  console.log('🖤🛣️ BlackRoad Deployment System');
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log('🚀 BlackRoad Deployment Engine');
+    console.log('===============================');
+    console.log(`🌐 Server running on port ${PORT}`);
+    console.log(`📂 Deploy directory: ${DEPLOY_BASE_DIR}`);
+    console.log(`🎯 Target host: ${TARGET_HOST} (${TARGET_IP})`);
+    console.log(`📡 Registry API: ${REGISTRY_API}`);
+    console.log('');
+    console.log('Endpoints:');
+    console.log(`  POST /api/deploy - Trigger deployment`);
+    console.log(`  GET  /api/deploy/:id - Check deployment status`);
+    console.log(`  GET  /api/domains - List deployed domains`);
+    console.log(`  POST /api/webhook/github - GitHub webhook handler`);
+    console.log('');
+    console.log('🖤🛣️ BlackRoad Deployment System');
+  });
+}
+
+module.exports = { app, shellEscape };
